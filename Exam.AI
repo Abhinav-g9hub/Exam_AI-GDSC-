@@ -1,0 +1,338 @@
+#Code has been redacted to ensure codebase privacy
+ from google.cloud import aiplatform
+ from config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, BUCKET_NAME
+ 
+ os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
+ # Initialize AWS Textract client
+
+ 
+ # Vertex AI settings
+
+ 
+ # Initialize Vertex AI
+ aiplatform.init(project=PROJECT_ID, location=LOCATION)
+ 
+ # Get the endpoint
+ endpoint = aiplatform.Endpoint(
+     endpoint_name=f"projects/{PROJECT_ID}/locations/{LOCATION}/endpoints/{ENDPOINT_ID}"
+ )
+ 
+ def upload_to_s3(file_bytes, original_filename):
+     """Upload file to S3 bucket"""
+     s3 = boto3.client('s3', 
+                       aws_access_key_id=AWS_ACCESS_KEY_ID,
+                       aws_secret_access_key=AWS_SECRET_ACCESS_KEY, 
+                       region_name=AWS_REGION)
+ 
+     date_str = datetime.now().strftime("%Y-%m-%d")
+     base_name, extension = original_filename.rsplit('.', 1)
+     sanitized_base_name = base_name.replace(' ', '_')
+     file_name = f'{sanitized_base_name}_{date_str}.{extension}'
+ 
+     try:
+         s3.upload_fileobj(BytesIO(file_bytes), BUCKET_NAME, file_name)
+         return BUCKET_NAME, file_name
+     except ClientError as e:
+         st.error(f"Error uploading file to S3: {e}")
+         return None, None
+ 
+ def extract_text_from_pdf(file_bytes, original_filename):
+     """Extract text from PDF using Textract"""
+     bucket_name, file_name = upload_to_s3(file_bytes, original_filename)
+     if not bucket_name or not file_name:
+         return None
+ 
+     try:
+         response = textract_client.start_document_analysis(
+             DocumentLocation={
+                 'S3Object': {
+                     'Bucket': bucket_name,
+                     'Name': file_name
+                 }
+             },
+             FeatureTypes=['TABLES', 'FORMS']
+         )
+ 
+         job_id = response['JobId']
+ 
+         # Poll for completion
+         while True:
+             response = textract_client.get_document_analysis(JobId=job_id)
+             status = response['JobStatus']
+             if status in ['SUCCEEDED', 'FAILED']:
+                 break
+             st.warning("Processing PDF... Please wait.")
+             time.sleep(5)
+ 
+         if status == 'FAILED':
+             raise Exception("Document analysis failed")
+ 
+         # Get all text blocks
+         text_blocks = []
+         paginator = textract_client.get_paginator('get_document_analysis')
+         pages = paginator.paginate(JobId=job_id)
+ 
+         for page in pages:
+             blocks = page['Blocks']
+             text_blocks.extend([block['Text'] for block in blocks 
+                               if block['BlockType'] == 'LINE'])
+ 
+         return ' '.join(text_blocks)
+ 
+     except Exception as e:
+         st.error(f"Error processing PDF: {e}")
+         return None
+ 
+ def extract_text_from_image(file_bytes):
+     """Extract text from image using Textract"""
+     try:
+         response = textract_client.detect_document_text(
+             Document={'Bytes': file_bytes}
+         )
+ 
+         text_blocks = [block['Text'] for block in response['Blocks'] 
+                       if block['BlockType'] == 'LINE']
+         return ' '.join(text_blocks)
+ 
+     except Exception as e:
+         st.error(f"Error processing image: {e}")
+         return None
+ 
+ def call_gemma
+     """Send text to Gemma model using Vertex AI endpoint"""
+     full_prompt = prompt + text
+ 
+     instance = {
+         "@requestFormat": "chatCompletions",
+         "messages": [
+             {
+                 "role": "user",
+                 "content": [
+                     {
+                         "type": "text",
+                         "text": full_prompt
+                     }
+                 ]
+             }
+         ],
+         "max_tokens": 1800,
+         "temperature": 1,
+         "top_p": 1,
+         "top_k": 1
+     }
+ 
+ 
+     try:
+         response = endpoint.predict(instances=[instance])
+ 
+         if hasattr(response, 'predictions') and response.predictions:
+             predictions = response.predictions[0]
+             if isinstance(predictions, dict) and 'choices' in predictions:
+                 choices = predictions['choices']
+                 if choices and isinstance(choices, list) and len(choices) > 0:
+                     first_choice = choices[0]
+                     if isinstance(first_choice, dict) and 'message' in first_choice:
+                         content = first_choice['message'].get('content', '')
+                         return content
+ 
+         st.error("Unexpected response format from the model")
+         st.write("Debug - Raw response:", response.predictions)
+         return ""
+ 
+     except Exception as e:
+         st.error(f"Error during model processing: {str(e)}")
+         return ""
+ 
+             return None
+ 
+         # Extract headers
+         headers = [header.strip() for header in table_lines[0].split('|')[1:-1]]
+         headers = [h for h in headers if h]
+         if len(headers) == 0:
+             st.error("No headers found in the table.")
+             return None
+ 
+      
+             # Handle HTML content while preserving intended line breaks
+             row_data = [re.sub(r'<br\s*/?>|<p>|</p>', '\n', cell) for cell in row_data]
+             row_data = [re.sub(r'<[^>]+>', ' ', cell).strip() for cell in row_data]
+ 
+             # Normalize line breaks and remove excessive whitespace
+             row_data = ['\n'.join(filter(None, cell.split('\n'))) for cell in row_data]
+             row_data = [re.sub(r'\s+', ' ', cell.replace('\n', ' ')).strip() for cell in row_data]
+ 
+             if len(row_data) == len(headers):
+                 data_rows.append(row_data)
+ 
+         if len(data_rows) == 0:
+             st.error("No data rows found in the table.")
+             return None
+ 
+         # Create DataFrame with wrapped text
+         df = pd.DataFrame(data_rows, columns=headers)
+ 
+         # Clean up any remaining whitespace while preserving wrapped text
+         df = df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
+ 
+         # Set display options for wrapped text
+         pd.set_option('display.max_colwidth', None)
+         pd.set_option('display.max_rows', None)
+         pd.set_option('display.width', None)
+ 
+         return df
+ 
+     except Exception as e:
+         st.error(f"Error parsing table: {str(e)}")
+         st.text("Table text causing error:")
+         st.text(table_text)
+         return None
+         # Debug: Log data rows
+         # st.text("Extracted data rows:")
+         # st.text(data_rows)
+ 
+         df = pd.DataFrame(data_rows, columns=headers)
+         df = df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
+ 
+         return df
+ 
+     except Exception as e:
+         st.error(f"Error parsing table: {str(e)}")
+         st.text("Table text causing error:")
+         st.text(table_text)
+         return None
+ 
+ def display_random_facts():
+     """Independent thread to update facts every 10 seconds"""
+     while True:
+         if 'stop_facts' not in st.session_state:
+             fact = random.choice(FACTS)
+             if 'fact_container' in st.session_state:
+                 st.session_state.fact_container.info(fact)
+             time.sleep(10)
+         else:
+             break
+ 
+ def clear_progress_and_facts():
+     """Clear progress bar and stop facts after delay"""
+     time.sleep(2)  # Wait for 2 seconds
+     if 'progress_bar' in st.session_state:
+         st.session_state.progress_bar.empty()
+     if 'fact_container' in st.session_state:
+         st.session_state.fact_container.empty()
+     st.session_state.stop_facts = True
+ 
+ def main():
+     st.title("Exam.ai Pre-Public Release")
+     uploaded_files = st.file_uploader(
+         "Upload files (supports images and PDFs)", 
+         type=["jpg", "jpeg", "png", "pdf"], 
+         accept_multiple_files=True
+     )
+ 
+     if uploaded_files:
+         # Initialize progress tracking
+         st.session_state.progress_bar = st.progress(0, text=progress_text)
+         st.session_state.fact_container = st.empty()
+         progress_placeholder = st.empty()
+         progress_bar = progress_placeholder.progress(0, text=progress_text)
+         fact_container = st.empty()
+ 
+         # Start facts display in separate thread
+         if 'facts_thread' not in st.session_state:
+             st.session_state.stop_facts = False
+             facts_thread = threading.Thread(target=display_random_facts)
+             facts_thread.daemon = True  # Thread will stop when main program exits
+             facts_thread.start()
+             st.session_state.facts_thread = facts_thread
+         # Initialize or update fact display timer in session state
+         if 'last_fact_time' not in st.session_state:
+             st.session_state.last_fact_time = time.time()
+             st.session_state.current_fact = random.choice(FACTS)
+ 
+         combined_text = ""
+         total_files = len(uploaded_files)
+ 
+         # File processing loop
+         for idx, file in enumerate(uploaded_files):
+             # Update fact if 10 seconds have passed
+             current_time = time.time()
+             if current_time - st.session_state.last_fact_time >= 10:
+                 st.session_state.current_fact = random.choice(FACTS)
+                 st.session_state.last_fact_time = current_time
+             
+             # Display current fact
+             fact_container.info(st.session_state.current_fact)
+             
+             # Calculate progress based on file processing (0-60%)
+             progress = int((idx / total_files) * 60)
+             st.session_state.progress_bar.progress(progress, text=progress_text)
+             progress_bar.progress(progress, text=progress_text)
+ 
+             # Process file
+             file_bytes = file.read()
+             if file.type == "application/pdf":
+                 extracted_text = extract_text_from_pdf(file_bytes, file.name)
+             else:
+                 extracted_text = extract_text_from_image(file_bytes)
+ 
+             if extracted_text:
+                 combined_text += f"{extracted_text}\n"
+             
+             # Small delay to allow UI updates
+             time.sleep(0.1)
+ 
+         # Process final steps
+         if combined_text:
+             # Question isolation (60-75%)
+             st.session_state.progress_bar.progress(60, text=progress_text)
+             progress_bar.progress(60, text=progress_text)
+             isolated_questions = call_llama_model(ISOLATE_PROMPT, combined_text)
+ 
+             if isolated_questions:
+                 # Question processing (75-90%)
+                 st.session_state.progress_bar.progress(75, text=progress_text)
+                 progress_bar.progress(75, text=progress_text)
+                 frequency_analysis = call_llama_model(FREQUENCY_PROMPT, isolated_questions)
+ 
+                 if frequency_analysis:
+                     # Final processing (90-100%)
+                     st.session_state.progress_bar.progress(90, text=progress_text)
+                     progress_bar.progress(90, text=progress_text)
+                     df = parse_markdown_table(frequency_analysis)
+ 
+                     if df is not None:
+                         def style_df(row):
+                             return ['font-weight: bold' if col == 'Parent Question' else '' 
+                                    for col in row.index]
+ 
+                         df.index = range(1, len(df) + 1)
+                         if 'Frequency' in df.columns:
+                             df['Frequency'] = pd.to_numeric(df['Frequency'], errors='coerce')
+                             df = df.sort_values('Frequency', ascending=False)
+ 
+                         styled_df = df.style.apply(style_df, axis=1)
+                         st.session_state.progress_bar.progress(100, text="Processing complete!")
+                         
+                         # Start thread to clear progress and facts after delay
+                         clear_thread = threading.Thread(target=clear_progress_and_facts)
+                         clear_thread.daemon = True
+                         clear_thread.start()
+                         progress_bar.progress(100, text="Processing complete!")
+ 
+                         # Display final dataframe
+                         st.dataframe(styled_df, use_container_width=True)
+                         st.text(frequency_analysis)
+                         frequency_analysis
+                         
+                         # Clear progress bar and facts after 2 seconds
+                         time.sleep(2)
+                         progress_placeholder.empty()
+                         fact_container.empty()
+                     else:
+                         st.error("Failed to create table from the analysis.")
+                         st.text("Raw analysis output:")
+                         st.text(frequency_analysis)
+ 
+ 
+ if __name__ == "__main__":
+     main()
